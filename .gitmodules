@@ -1,0 +1,3 @@
+[submodule "libusdt"]
+	path = libusdt
+	url = https://github.com/gerty3000/libusdt.git
