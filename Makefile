@@ -8,7 +8,7 @@ CFLAGS	:= -W -Wall -Wextra \
 
 JNILIB 	:= libdtrace4j.jnilib
 CSOURCE := main.c
-GCC 	:= gcc
+CC 		:= clang
 
 JSOURCE := ThreadTest.java MethodTest.java
 JCLASS 	:= ThreadTest.class MethodTest.class
@@ -35,7 +35,7 @@ $(OUTPUT):
 all: $(CSOURCE) $(JSOURCE) $(JNILIB) $(JCLASS)
 
 $(JNILIB): $(CSOURCE)
-	$(GCC) $(CFLAGS) -isystem $(INCLUDE) -o $@ $(CSOURCE)
+	$(CC) $(CFLAGS) -isystem $(INCLUDE) -o $@ $(CSOURCE)
 
 $(JCLASS): $(JSOURCE)
 	$(JAVAC) $(JSOURCE)

@@ -1,215 +1,100 @@
 #include <jvmti.h>
 #include <stdlib.h>
+#include <string.h> // memset
 
 #define UNUSED __attribute__ ((unused))
+; // <-- fixes syntax highlighting
 
-JavaVM *jvm;
+void JNICALL handler_vminit(jvmtiEnv *jvmti_env, JNIEnv *jni_env, jthread thread);
+void JNICALL handler_breakpoint(jvmtiEnv *jvmti_env, JNIEnv* jni_env, jthread thread, jmethodID method, jlocation location);
 
-jthread threads[10] = {0};
-long delays[10] = {0};
+static void check_jvmti_error(jvmtiEnv *env UNUSED, jvmtiError err, char *msg) {
+        if (err != JVMTI_ERROR_NONE) {
+                printf("JVMTI error (%d): %s\n", err, msg);
+                fflush(stdout);
+        }
+        // TODO should exit program - not sure what to do here
+}
 
-void JNICALL VMInit(jvmtiEnv *jvmti_env, JNIEnv *jni_env, jthread thread);
-void JNICALL MethodEntry(jvmtiEnv *jvmti_env, JNIEnv *jni_env, jthread thread, jmethodID method);
-void JNICALL MonitorWait(jvmtiEnv *jvmti_env, JNIEnv *jni_env, jthread thread, jobject object, jlong timeout);
-void JNICALL MonitorWaited(jvmtiEnv *jvmti_env, JNIEnv *jni_env, jthread thread, jobject object, jboolean timed_out);
-
-JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM *vm UNUSED, char *options, void *reserved UNUSED)
+JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM *jvm, char *options UNUSED, void *reserved UNUSED)
 {
-        (void) reserved;
-
-        char do_method_entry = 0;
-
-        jvmtiEnv *jvmti_env;
+        jvmtiEnv *env;
+        jvmtiEventCallbacks event_cbs;
+        jvmtiCapabilities caps;
         jvmtiError err;
-        jvmtiEventCallbacks callbacks;
-        jvmtiCapabilities capabilities;
 
-        printf("c: In OnLoad - option: %s\n", options);
+        printf("Loading module now.\n");
+
+        (*jvm)->GetEnv(jvm, (void **) &env, JVMTI_VERSION_1_0);
+
+        /* Set up callbacks, capabilities, and enable breakpoint events. */
+
+        (void) memset(&event_cbs, 0, sizeof(jvmtiEventCallbacks));
+        event_cbs.VMInit = handler_vminit;
+        event_cbs.Breakpoint = handler_breakpoint;
+
+        err = (*env)->SetEventCallbacks(env, &event_cbs, sizeof(jvmtiEventCallbacks));
+        check_jvmti_error(env, err, "Unable to load callbacks");
+
+        (void) memset(&caps, 0, sizeof(jvmtiCapabilities));
+        caps.can_generate_breakpoint_events = 1;
+
+        err = (*env)->AddCapabilities(env, &caps);
+        check_jvmti_error(env, err, "Unable to add capabilities");
+
+        err = (*env)->SetEventNotificationMode(env, JVMTI_ENABLE, JVMTI_EVENT_VM_INIT, NULL);
+        check_jvmti_error(env, err, "Unable to enable VMInit notifications");
+        err = (*env)->SetEventNotificationMode(env, JVMTI_ENABLE, JVMTI_EVENT_BREAKPOINT, NULL);
+        check_jvmti_error(env, err, "Unable to enable breakpoint event notifications");
+
         fflush(stdout);
 
-        if(options != NULL) {
-                do_method_entry = 1;
-        }
-
-        jvm = vm;
-        (*jvm)->GetEnv(jvm, (void **)&jvmti_env, JVMTI_VERSION_1_0);
-
-        callbacks.VMInit = VMInit;
-        callbacks.MethodEntry = MethodEntry;
-        callbacks.MonitorWait = MonitorWait;
-        callbacks.MonitorWaited = MonitorWaited;
-
-        err = (*jvmti_env)->SetEventCallbacks(jvmti_env, &callbacks, sizeof(jvmtiEventCallbacks));
-        if(err != JVMTI_ERROR_NONE) {
-                printf("c: SetCallbacks failed: %d\n", err);
-                fflush(stdout);
-        }
-
-        err = (*jvmti_env)->SetEventNotificationMode(jvmti_env, JVMTI_ENABLE, JVMTI_EVENT_VM_INIT, NULL);
-        if(err != JVMTI_ERROR_NONE) {
-                printf("c: SetEventNotificationMode(VM_INIT) failed: %d\n", err);
-                fflush(stdout);
-        }
-
-        capabilities.can_generate_method_entry_events = 1;
-        capabilities.can_generate_monitor_events = 1;
-
-        err = (*jvmti_env)->AddCapabilities(jvmti_env, &capabilities);
-        if(err != JVMTI_ERROR_NONE) {
-                printf("c: AddCapabilities failed: %d\n", err);
-                fflush(stdout);
-        }
-
-        if(do_method_entry) {
-                err = (*jvmti_env)->SetEventNotificationMode(jvmti_env, JVMTI_ENABLE, JVMTI_EVENT_METHOD_ENTRY, NULL);
-                if(err != JVMTI_ERROR_NONE) {
-                        printf("c: SetEventNotificationMode(METHOD_ENTRY) failed: %d\n", err);
-                        fflush(stdout);
-                }
-        }
-
-        err = (*jvmti_env)->SetEventNotificationMode(jvmti_env, JVMTI_ENABLE, JVMTI_EVENT_MONITOR_WAIT, NULL);
-        if(err != JVMTI_ERROR_NONE) {
-                printf("c: SetEventNotificationMode(MONITOR_WAIT) failed: %d\n", err);
-                fflush(stdout);
-        }
-
-        err = (*jvmti_env)->SetEventNotificationMode(jvmti_env, JVMTI_ENABLE, JVMTI_EVENT_MONITOR_WAITED, NULL);
-        if(err != JVMTI_ERROR_NONE) {
-                printf("c: SetEventNotificationMode(MONITOR_WAITED) failed: %d\n", err);
-                fflush(stdout);
-        }
-
-        return 0;
+        return JNI_OK;
 }
 
 JNIEXPORT void JNICALL Agent_OnUnload(JavaVM *vm UNUSED)
 {
-        printf("c: In OnUnLoad\n");
+        printf("Unloading module now.\n");
         fflush(stdout);
 }
 
-void JNICALL VMInit(jvmtiEnv *jvmti_env UNUSED, JNIEnv *jni_env UNUSED, jthread thread UNUSED)
+void JNICALL handler_breakpoint(jvmtiEnv *jvmti_env UNUSED, JNIEnv* jni_env UNUSED, jthread thread UNUSED, jmethodID method UNUSED, jlocation location UNUSED)
 {
-        printf("c: In VMInit!\n");
+        printf("hit a breakpoint!\n");
         fflush(stdout);
 }
 
-void JNICALL MethodEntry(jvmtiEnv *jvmti_env, JNIEnv *jni_env, jthread thread, jmethodID method)
+// TODO will still be called if I attach the agent after starting the JVM?
+void JNICALL handler_vminit(jvmtiEnv *jvmti_env UNUSED, JNIEnv *jni_env UNUSED, jthread thread UNUSED)
 {
+        jclass klass;
+        jmethodID mid;
         jvmtiError err;
-        jclass clazz;
-        char *name;
-        char *signature;
-        char *generic;
-        jvmtiThreadInfo info;
+        jlocation begin, end;
 
-        err = (*jvmti_env)->GetThreadInfo(jvmti_env, thread, &info);
-        if(err != JVMTI_ERROR_NONE) {
-                printf("c: GetThreadInfo failed: %d\n", err);
-        } else {
-                printf("c: Thread %s", info.name);
-                (*jvmti_env)->Deallocate(jvmti_env, (unsigned char *) info.name);
-                (*jni_env)->DeleteLocalRef(jni_env, info.thread_group);
-                (*jni_env)->DeleteLocalRef(jni_env, info.context_class_loader);
+        printf("Running handler_vminit.\n");
+        fflush(stdout);
+
+        /* Get a class by name, then add a breakpoint to one of its methods by name. */
+
+        klass = (*jni_env)->FindClass(jni_env, "java/lang/String");
+        if (klass == NULL) {
+                printf("Error: unable to find class\n");
         }
-
-        err = (*jvmti_env)->GetMethodDeclaringClass(jvmti_env, method, &clazz);
-        if(err != JVMTI_ERROR_NONE) {
-                printf("\nc: GetMethodDeclaringClass failed: %d\n", err);
+        (*jni_env)->ExceptionClear(jni_env);
+        mid = (*jni_env)->GetStaticMethodID(jni_env, klass, "valueOf", "(I)Ljava/lang/String;");
+        // TODO note that GetMethodID and GetStaticMethodID are different here...
+        if (mid == NULL) {
+                printf("Error: unable to find method\n");
         }
+        (*jni_env)->ExceptionClear(jni_env);
 
-        err = (*jvmti_env)->GetClassSignature(jvmti_env, clazz, &signature, &generic);
-        if(err != JVMTI_ERROR_NONE) {
-                printf("\nc: GetClassSignature failed: %d\n", err);
-        } else {
-                printf(" called Class %s/%s", signature, generic);
-                (*jvmti_env)->Deallocate(jvmti_env, (unsigned char *) signature);
-                (*jvmti_env)->Deallocate(jvmti_env, (unsigned char *) generic);
-        }
+        err = (*jvmti_env)->GetMethodLocation(jvmti_env, mid, &begin, &end);
+        check_jvmti_error(jvmti_env, err, "Unable to find method location");
+        (*jni_env)->ExceptionClear(jni_env);
 
-        (*jni_env)->DeleteLocalRef(jni_env, clazz);
+        err = (*jvmti_env)->SetBreakpoint(jvmti_env, mid, (jlocation) 0); // TODO probably will not work... we'll see
+        check_jvmti_error(jvmti_env, err, "Unable to set breakpoint");
 
-        err = (*jvmti_env)->GetMethodName(jvmti_env, method, &name, &signature, &generic);
-        if(err != JVMTI_ERROR_NONE) {
-                printf("\nc: GetMethodName failed: %d\n", err);
-        } else {
-                printf(" Method %s%s%s", name, signature, generic);
-                (*jvmti_env)->Deallocate(jvmti_env, (unsigned char *) name);
-                (*jvmti_env)->Deallocate(jvmti_env, (unsigned char *) signature);
-                (*jvmti_env)->Deallocate(jvmti_env, (unsigned char *) generic);
-        }
-
-        printf("\n");
         fflush(stdout);
 }
-
-void JNICALL MonitorWait(jvmtiEnv *jvmti_env, JNIEnv *jni_env, jthread thread, jobject object, jlong timeout)
-{
-        int i;
-        jvmtiError err;
-        jlong time;
-        jvmtiThreadInfo info;
-
-        err = (*jvmti_env)->GetTime(jvmti_env, &time);
-        for(i = 0; i < 10; i++) {
-                if(threads[i] == 0) {
-                        threads[i] = thread;
-                        delays[i] = time;
-                        break;
-                }
-
-                if(threads[i] == thread) {
-                        delays[i] = time;
-                        break;
-                }
-        }
-
-        err = (*jvmti_env)->GetThreadInfo(jvmti_env, thread, &info);
-        if(err != JVMTI_ERROR_NONE) {
-                printf("c: GetThreadInfo failed: %d\n", err);
-                fflush(stdout);
-        } else {
-                printf("c: Thread %s waiting: %d, %d, %d\n", info.name, thread, object, timeout);
-                fflush(stdout);
-                (*jvmti_env)->Deallocate(jvmti_env, (unsigned char *) info.name);
-                (*jni_env)->DeleteLocalRef(jni_env, info.thread_group);
-                (*jni_env)->DeleteLocalRef(jni_env, info.context_class_loader);
-        }
-}
-
-void JNICALL MonitorWaited(jvmtiEnv *jvmti_env, JNIEnv *jni_env, jthread thread, jobject object UNUSED, jboolean timed_out UNUSED)
-{
-        char found = 0;
-        int i;
-        jvmtiError err;
-        jvmtiThreadInfo info;
-        jlong time;
-        long delta;
-
-        err = (*jvmti_env)->GetTime(jvmti_env, &time);
-        for(i = 0; i < 10; i++) {
-                if(threads[i] == thread) {
-                        found++;
-                        delta = time - delays[i];
-                        delays[i] = 0;
-                        break;
-                }
-
-        }
-        if(!found) {
-                printf("c: Orphaned monitor: %d\n", thread);
-        } else {
-                err = (*jvmti_env)->GetThreadInfo(jvmti_env, thread, &info);
-                if(err != JVMTI_ERROR_NONE) {
-                        printf("c: GetThreadInfo failed: %d\n", err);
-                } else {
-                        printf("c: Thread %s waited %ld (%0.2f)\n", info.name, delta, ((double) delta / 1e6));
-                        (*jvmti_env)->Deallocate(jvmti_env, (unsigned char *) info.name);
-                        (*jni_env)->DeleteLocalRef(jni_env, info.thread_group);
-                        (*jni_env)->DeleteLocalRef(jni_env, info.context_class_loader);
-                }
-                fflush(stdout);
-        }
-}
-
