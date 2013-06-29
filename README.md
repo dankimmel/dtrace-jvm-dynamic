@@ -10,7 +10,7 @@ This library is not completed. It will not be useful or stable until significant
 1. Create a Java agent which can set a breakpoint on a Java method entrypoint.
 2. Make the agent receive notification that the breakpoint is reached and print something to the terminal.
 3. After printing something, make the agent resume execution of the stopped thread.
-4. Make the agent read arguments in from the command line that causes it to be loaded by the Java process.
+4. Make the agent read arguments in from the command that causes it to be loaded into the JVM.
 5. Translate those arguments into breakpoints which should be set.
 6. Link `libusdt` into the agent and make sure its functions are accessible inside the JVM.
 7. Define a new provider `java$pid` and create static probes in that provider corresponding to the arguments passed into the agent. DTrace should be able to find these and set breakpoints on them, even though they aren't being called yet.
